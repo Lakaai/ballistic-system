@@ -127,7 +127,7 @@ end
     representing p(𝑦)
 
     # Arguments
-    - `func`: Current state vector.
+    - `func`: 
     - `density`: The Gaussian distribution to be propogated through the nonlinear function.
 
     # Returns
@@ -136,43 +136,34 @@ end
 """
 function affine_transform(func::Any, density::Gaussian; sqrt=sqrt)
 
-    # TODO: Implement noise increment if required. 
-    # TODO: Should affine transform be able work on any function or only functions with signature(x, dt)?
+    μ𝑥 = density.mean
 
+    # Evalute h(μx) to obtain μy 
+    μ𝑦 = func(μ𝑥)
+
+    # Evalute ∂h(x)/∂x at x = μ, that is the Jacobian of h evalutated at μ
+    C = ForwardDiff.jacobian(func, μ𝑥)
+    
     if sqrt
-        μx = density.mean
-        Sx = density.covariance
-
-        # Evalute ∂h(x)/∂x at x = μ, that is the Jacobian of h evalutated at μ
-        C = ForwardDiff.jacobian(func, μx)
-
-        # Evalute h(μx) to obtain μy 
-        μy = func(μx, dt)
-
-        # Propogate the covariance 
-        Sy = Sx*C' 
+        # S𝑦𝑦ᵀS𝑦𝑦 = C * S𝑥𝑥ᵀS𝑥𝑥 * C' = (S𝑥𝑥Cᵀ)ᵀ(S𝑥𝑥Cᵀ)
+        S𝑥𝑥 = density.covariance
     
         # Ensure Sy is upper triangular via QR decomposition
-        Q, R1 = qr(Sy)
-        Sy_upper = UpperTriangular(Sy)
+        S𝑦𝑦 = qr(S𝑥𝑥*C').R 
+        
+        return from_sqrt_moment(μ𝑦, S𝑦𝑦) 
 
-        return from_sqrt_moment(μy, Sy_upper) 
+    else
 
-    else 
-        μx = density.mean
-        Σx = density.covariance
-
-        J = ForwardDiff.jacobian(func, μx)
-
-        μy = func(μx)
-        Σy = J * Σx * J'
-
-        @assert isapprox(Σy, Σy', rtol=1e-6) "Covariance not symmetric"
-        @assert all(eigvals(Σy) .>= -1e-10) "Covariance not positive semi-definite"
-
-        return from_moment(μy, Σy)
+        Σ𝑥𝑥 = density.covariance 
+        Σ𝑦𝑦 = C * Σ𝑥𝑥 * C'
+        
+        @assert isapprox(Σ𝑦𝑦, Σ𝑦𝑦', rtol=1e-6) "Covariance not symmetric"
+    
+        return from_moment(μ𝑦, Σ𝑦𝑦)
     end 
 end    
+
 
 """
     rk4_step(x::Vector{Float64}, dt::Float64) -> Vector{Float64}
@@ -316,6 +307,7 @@ function augmentedDynamics(X::Any)
     return dX
 end 
 
+
 """
     cost_function_factory(density::Gaussian, measurement)
 
@@ -360,9 +352,8 @@ function measurement_update_bfgs(density::Gaussian, measurement::Any; sqrt=sqrt)
 
         # Posterior sqrt covariance approximation (naive)
         H = ForwardDiff.hessian(cost_function_factory(density, measurement; sqrt=sqrt), x_map)
-        @show H
-        # H_inv = inv(H)
-        # Q, R = qr(H_inv) # Perform QR decomposition
+
+
         F = cholesky(H)   # H = F'U F, F.U is upper triangular
         S = Matrix(inv(F.U))      # S * S' = H^{-1}
         
@@ -375,13 +366,11 @@ function measurement_update_bfgs(density::Gaussian, measurement::Any; sqrt=sqrt)
 
         df = TwiceDifferentiable(cost_function_factory(density, measurement; sqrt=sqrt), x0, autodiff = :forward) # Store and reuse gradient and hessian 
         res = optimize(df, x0, BFGS())
-        # @assert res.converged "res has not converged"
 
         x_map = Optim.minimizer(res)
 
         # Posterior sqrt covariance approximation (naive)
         H = ForwardDiff.hessian(cost_function_factory(density, measurement; sqrt=sqrt), x_map)
-        @show H
          
         Σ = Matrix(inv(H))     
         
@@ -393,52 +382,32 @@ function measurement_update_unscented(density::Gaussian, measurement::Any; sqrt=
     
     if sqrt
         # Form the joint probability density 𝑝(𝑥ₖ, 𝑦ₖ | 𝑦₁...𝑦ₖ₋₁), that is the probability of the state 𝑥ₖ and the measurement 𝑦ₖ given all past measurements 𝑦₁, 𝑦₂, ..., 𝑦ₖ₋₁
-        # new_density = unscented_transform(predict_measurement, density; sqrt=true)
-        error("Not implemented yet") # TODO: Implement square root covariance
+        transformed_density = unscented_transform(predict_measurement, density; sqrt=sqrt)
 
         # Condition on the measurement 𝑦ₖ to form the posterior density 𝑝(𝑥ₖ | 𝑦ₖ)
-
-        # Return the posterior density 𝑝(𝑥ₖ | 𝑦ₖ)
-        return from_sqrt_moment(μ, S)
+        return conditional(transformed_density, 2:4, 1:1, measurement; sqrt=sqrt)
         
     else 
 
-        # Measurement noise covariance
-        # R = Matrix(Diagonal([50.0^2]))  # Adjust as needed
-        noise_density = Gaussian(0, Matrix(Diagonal([50.0^2])))
+        # Measurement noise covariance 
+        # noise_density = from_moment(0, Matrix(Diagonal([50.0^2])))
 
         # density = join(density, noise_density)
 
         # Form the joint probability density 𝑝(𝑥ₖ, 𝑦ₖ | 𝑦₁...𝑦ₖ₋₁), that is the probability of the state 𝑥ₖ and the measurement 𝑦ₖ given all past measurements 𝑦₁, 𝑦₂, ..., 𝑦ₖ₋₁
         transformed_density = unscented_transform(augmented_predict_measurement, density; sqrt=sqrt)
 
-        L = length(density.mean)
         μ = transformed_density.mean
         Σ = transformed_density.covariance
         
-        R = Matrix(Diagonal([50.0^2]))                    # pick your variance
-        Σ[L+1:end, L+1:end] += R     # measurement block
-        Σ = 0.5 * (Σ + Σ')          # symmetrize
+        R = Matrix(Diagonal([50.0^2]))                    
+        Σ[1:1, 1:1] += R                        # Measurement block
+        Σ = 0.5 * (Σ + Σ')                      # Symmetrise
         
         transformed_density = from_moment(μ, Σ)
 
         # Condition on the measurement 𝑦ₖ to form the posterior density 𝑝(𝑥ₖ | 𝑦ₖ)
-        updated_density = conditional(transformed_density, 1:3, 4, measurement; sqrt=sqrt)
-
-        μ_updated = updated_density.mean
-        Σ_updated = updated_density.covariance
-
-        return from_moment(μ_updated, Σ_updated)
-
-        # My CODE
-
-        # Σ𝑥𝑦 = sum(𝑾ᶜ[i] * (𝛘[:, i] - μ𝑥) * (𝒴[i] - μ𝑦) for i in 1:(2L + 1)) # Cross-covariance check should a trasnpose be in here 
-
-        # # But then you MUST do the Kalman update:
-        # K = Σ𝑥𝑦 / Σ𝑦                                    # Kalman gain
-        # μ_updated = μ𝑥 + K * (measurement .- μ𝑦)        # Updated state mean
-        # Σ_updated = Σ𝑥 - K * Σ𝑦 * K'                    # Updated state covariance
-        
+        return conditional(transformed_density, 2:4, 1:1, measurement; sqrt=sqrt)
     end 
 end 
 
@@ -446,19 +415,36 @@ function measurement_update_affine(density::Gaussian, measurement::Any; sqrt=sqr
     if sqrt
         error("Not implemented yet") # TODO: Implement square root affine update
     else 
+        @show density.mean
+        @show density.covariance
+        transformed_density = affine_transform(augmented_predict_measurement, density; sqrt=sqrt)
 
-        μ_pred = density.mean
-        Σ_pred = density.covariance
+        μ = transformed_density.mean
         
-        # Use gradient since the measurement function returns a scalar
-        H = ForwardDiff.jacobian(predict_measurement, μ_pred)
-        R = Matrix(Diagonal([50.0^2])) # Measurement noise covariance
+        Σ = transformed_density.covariance
+        
+        R = Matrix(Diagonal([50.0^2]))                    
+        Σ[1:1, 1:1] += R                        # Measurement block
+        Σ = 0.5 * (Σ + Σ')                      # Symmetrise
+        
+        transformed_density = from_moment(μ, Σ)
 
-        K = Σ_pred * H' / (H * Σ_pred * H' + R)
-        μ = μ_pred + K * (measurement - predict_measurement(μ_pred))
-        Σ = (I - K * H) * Σ_pred
+        # Condition on the measurement 𝑦ₖ to form the posterior density 𝑝(𝑥ₖ | 𝑦ₖ)
+        return conditional(transformed_density, 2:4, 1:1, measurement; sqrt=sqrt)
 
-        return from_moment(μ, Σ) 
+        # Working code below 
+        # μ_pred = density.mean
+        # Σ_pred = density.covariance
+        
+        # # Use gradient since the measurement function returns a scalar
+        # H = ForwardDiff.jacobian(predict_measurement, μ_pred)
+        # R = Matrix(Diagonal([50.0^2])) # Measurement noise covariance
+
+        # K = Σ_pred * H' / (H * Σ_pred * H' + R)
+        # μ = μ_pred + K * (measurement - predict_measurement(μ_pred))
+        # Σ = (I - K * H) * Σ_pred
+
+        # return from_moment(μ, Σ) 
     end 
 end 
 

@@ -29,7 +29,8 @@ function augmented_predict_measurement(𝑥; grad=false)
         h, dhdx = predict_measurement(𝑥; grad=grad)
     else 
         
-        augmented_mean = vcat(𝑥, 𝑦)
+        # augmented_mean = vcat(𝑥, 𝑦) # TODO: Revent if the change does not work
+        augmented_mean = vcat(𝑦, 𝑥)
         return augmented_mean
     end 
 end 

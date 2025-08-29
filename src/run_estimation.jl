@@ -38,7 +38,7 @@ function run_filter(t_hist, y_hist, mu0, Σ0)
         density = predict(time, density, AFFINE; sqrt=false)            # Form the predicted density p(𝑥ₖ ∣ 𝑦₁:𝑦ₖ₋₁) by propagating p(𝑥ₖ₋₁ ∣ 𝑦₁:𝑦ₖ₋₁) through the process model 
 
         # Process the measurement event
-        density = update(density, measurement, BFGSTRUST; sqrt=false)   # Compute the filtered density p(𝑥ₖ ∣ 𝑦₁:𝑦ₖ)
+        density = update(density, measurement, AFFINE; sqrt=false)      # Compute the filtered density p(𝑥ₖ ∣ 𝑦₁:𝑦ₖ)
         
         # Store the data for plotting
         push!(μ_hist, density.mean)
