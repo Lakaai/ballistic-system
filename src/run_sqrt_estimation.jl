@@ -34,16 +34,16 @@ function run_sqrt_filter(t_hist, y_hist, mu0, S0)
         
         println("Time: ", time)
 
-        # Predict forward in time 
-        density = predict(time, density, AFFINE; sqrt=true) # Form the predicted density p(𝑥ₖ ∣ 𝑦ₖ₋₁) by propagating p(𝑥ₖ₋₁ ∣ 𝑦ₖ₋₁) through the process model 
+        # Form the predicted density p(𝑥ₖ ∣ 𝑦ₖ₋₁) by propagating p(𝑥ₖ₋₁ ∣ 𝑦ₖ₋₁) through the process model 
+        density = predict(time, density, AFFINE; sqrt=true)         
 
-        # Process the measurement event
-        density = update(density, measurement, BFGSTRUST; sqrt=true) # Compute the filtered density p(𝑥ₖ ∣ 𝑦₁:𝑦ₖ)
+        # Compute the filtered density p(𝑥ₖ ∣ 𝑦₁:𝑦ₖ)
+        density = update(density, measurement, AFFINE; sqrt=true)   
         
-        # 3. Store the data for plotting
+        # Store the data for plotting, taking the absolute value of covariance since square-root factorisation can be negative
         push!(μ_hist, density.mean)
-        push!(S_hist, sqrt.(diag(density.covariance)))
-        
+        push!(S_hist, sqrt.(diag(abs.(density.covariance))))        
+
     end 
     return μ_hist, S_hist
 end 

@@ -15,8 +15,9 @@ const T0 = 288.15          # Temperature at sea level [K]
 const g  = 9.81            # Acceleration due to gravity [m/s²]
 time_ = 0                  # Previous time stamp 
 
-# Laplace Aproximation ℐ = ∫ₓf(x)dx ≈ f(x*) √det(2*π*P)
-# x* = argmax f(x)
+
+
+
 
 function predict(time::Any, density::Gaussian, update_method::UpdateMethod; sqrt=sqrt)
     global time_
@@ -54,118 +55,6 @@ end
 
 
 """
-"""
-function unscented_transform(func::Any, density::Gaussian; sqrt=sqrt)
-
-        μ𝑥 = density.mean
-        Σ𝑥 = density.covariance
-        L = length(μ𝑥)
-        
-        # UKF parameters
-        κ = 0
-        α = 1                   # originally 0.2
-        β = 2
-        λ = α^2 * (L + κ) - L
-
-        Σ𝑥 = 0.5 * (Σ𝑥 + Σ𝑥')                   # force symmetry
-        # Add regularization for numerical stability
-        # ε = 1e-3
-       
-
-        # Σ𝑥_reg = Σ𝑥 + ε * I
-        # Sₓ = cholesky((L + λ) * Σ𝑥_reg).L
-
-        Sₓ = cholesky((L + λ) * Σ𝑥).L
-        𝛘 = zeros(Float64, L, 2L + 1)
-        𝛘[:, 1] = μ𝑥
-        
-        for i in 1:L
-            𝛘[:, i+1] = μ𝑥 + Sₓ[:, i]
-            𝛘[:, i+1+L] = μ𝑥 - Sₓ[:, i]
-        end
-        
-        # Weights 
-        𝑾ᵐ = zeros(2L + 1)
-        𝑾ᶜ = zeros(2L + 1)
-        𝑾ᵐ[1] = λ / (L + λ)
-        𝑾ᶜ[1] = λ / (L + λ) + (1 - α^2 + β)
-        𝑾ᵐ[2:end] .= 1 / (2 * (L + λ))
-        𝑾ᶜ[2:end] .= 1 / (2 * (L + λ))
-
-        # Transform sigma points through measurement model
-        μ𝑦 = func(𝛘[:, 1]) # 𝒴[:, 1] = μ𝑦
-        n𝑦 = length(μ𝑦)
-        𝒴 = zeros(n𝑦, 2L + 1)    # Assuming scalar measurements
-
-        𝒴[:, 1] = μ𝑦
-        
-        for i in 2:(2L + 1)    
-            𝒴[:, i] = func(𝛘[:, i])
-        end
-        
-        # Compute measurement statistics
-
-        # μ𝑦 = sum(𝑾ᵐ[i] * 𝒴[i] for i in 1:(2L + 1))
-        # Σ𝑦 = sum(𝑾ᶜ[i] * (𝒴[i] - μ𝑦)^2 for i in 1:(2L + 1))
-        
-        # # Compute cross-covariance (state-measurement)
-        # Σ𝑥𝑦 = sum(𝑾ᶜ[i] * (𝛘[:, i] - μ𝑥) * (𝒴[i] - μ𝑦) for i in 1:(2L + 1))
-
-        # Clean and efficient way to compute the mean and covariance 
-
-        μ𝑦 = 𝒴 * 𝑾ᵐ
-        dY = 𝒴 .- μ𝑦
-        Σ𝑦 = dY * Diagonal(𝑾ᶜ) * dY'
-        Σ𝑦 = 0.5 * (Σ𝑦 + Σ𝑦')
-        return from_moment(μ𝑦, Σ𝑦)
-end 
-
-
-"""
-    This method transforms the Gaussian distribution p(𝑥) through a nonlinear function y = f(𝑥) by 
-    propogating information through the affine transformation. It returns a new Gaussian distribution
-    representing p(𝑦)
-
-    # Arguments
-    - `func`: 
-    - `density`: The Gaussian distribution to be propogated through the nonlinear function.
-
-    # Returns
-    - `p(𝑦)`: The transformed Gaussian distribution.
-
-"""
-function affine_transform(func::Any, density::Gaussian; sqrt=sqrt)
-
-    μ𝑥 = density.mean
-
-    # Evalute h(μx) to obtain μy 
-    μ𝑦 = func(μ𝑥)
-
-    # Evalute ∂h(x)/∂x at x = μ, that is the Jacobian of h evalutated at μ
-    C = ForwardDiff.jacobian(func, μ𝑥)
-    
-    if sqrt
-        # S𝑦𝑦ᵀS𝑦𝑦 = C * S𝑥𝑥ᵀS𝑥𝑥 * C' = (S𝑥𝑥Cᵀ)ᵀ(S𝑥𝑥Cᵀ)
-        S𝑥𝑥 = density.covariance
-    
-        # Ensure Sy is upper triangular via QR decomposition
-        S𝑦𝑦 = qr(S𝑥𝑥*C').R 
-        
-        return from_sqrt_moment(μ𝑦, S𝑦𝑦) 
-
-    else
-
-        Σ𝑥𝑥 = density.covariance 
-        Σ𝑦𝑦 = C * Σ𝑥𝑥 * C'
-        
-        @assert isapprox(Σ𝑦𝑦, Σ𝑦𝑦', rtol=1e-6) "Covariance not symmetric"
-    
-        return from_moment(μ𝑦, Σ𝑦𝑦)
-    end 
-end    
-
-
-"""
     rk4_step(x::Vector{Float64}, dt::Float64) -> Vector{Float64}
 
 Propagates the system state `xₖ` forward one time step using the classical Runge-Kutta 4 (RK4) integration method.
@@ -189,7 +78,8 @@ function rk4_step(xₖ::Any, dt::Any)
 
     return xₖ₊₁ 
 end 
-  
+ 
+
 """
     rk4_sde_step(xdw::Vector{Float64}, dt::Float64, idxQ::Vector{Int}, augmented_dynamics::Function) -> (Vector{Float64}, Matrix{Float64})
 
@@ -344,22 +234,22 @@ function measurement_update_bfgs(density::Gaussian, measurement::Any; sqrt=sqrt)
         x0 = density.mean
         S = density.covariance
 
+        # Laplace Aproximation ℐ = ∫ₓf(x)dx ≈ f(x*) √det(2*π*P)
+        
         df = TwiceDifferentiable(cost_function_factory(density, measurement; sqrt=sqrt), x0, autodiff = :forward) # Store and reuse gradient and hessian 
         res = optimize(df, x0, BFGS())
-        # @assert res.converged "res has not converged"
+        @assert res.converged "Optimiser has not converged."
 
+        # x* = argmax f(x)
         x_map = Optim.minimizer(res)
 
         # Posterior sqrt covariance approximation (naive)
         H = ForwardDiff.hessian(cost_function_factory(density, measurement; sqrt=sqrt), x_map)
 
-
         F = cholesky(H)   # H = F'U F, F.U is upper triangular
         S = Matrix(inv(F.U))      # S * S' = H^{-1}
         
         return Gaussian(x_map, S)
-        # ℐ = ∫ₓf(x)dx ≈ f(x*) √det(2*π*P) Laplace approximation
-
     else 
         x0 = density.mean
         Σ = density.covariance
@@ -379,7 +269,7 @@ function measurement_update_bfgs(density::Gaussian, measurement::Any; sqrt=sqrt)
 end 
 
 function measurement_update_unscented(density::Gaussian, measurement::Any; sqrt=sqrt)
-    
+
     if sqrt
         # Form the joint probability density 𝑝(𝑥ₖ, 𝑦ₖ | 𝑦₁...𝑦ₖ₋₁), that is the probability of the state 𝑥ₖ and the measurement 𝑦ₖ given all past measurements 𝑦₁, 𝑦₂, ..., 𝑦ₖ₋₁
         transformed_density = unscented_transform(predict_measurement, density; sqrt=sqrt)
@@ -413,14 +303,21 @@ end
 
 function measurement_update_affine(density::Gaussian, measurement::Any; sqrt=sqrt)
     if sqrt
-        error("Not implemented yet") # TODO: Implement square root affine update
-    else 
-        @show density.mean
-        @show density.covariance
+        display(density.covariance)
         transformed_density = affine_transform(augmented_predict_measurement, density; sqrt=sqrt)
 
         μ = transformed_density.mean
+        S = transformed_density.covariance
         
+        transformed_density = from_sqrt_moment(μ, S)
+
+        # Condition on the measurement 𝑦ₖ to form the posterior density 𝑝(𝑥ₖ | 𝑦ₖ)
+        return conditional(transformed_density, 2:4, 1:1, measurement; sqrt=sqrt)
+    else 
+        
+        transformed_density = affine_transform(augmented_predict_measurement, density; sqrt=sqrt)
+
+        μ = transformed_density.mean
         Σ = transformed_density.covariance
         
         R = Matrix(Diagonal([50.0^2]))                    
@@ -431,20 +328,6 @@ function measurement_update_affine(density::Gaussian, measurement::Any; sqrt=sqr
 
         # Condition on the measurement 𝑦ₖ to form the posterior density 𝑝(𝑥ₖ | 𝑦ₖ)
         return conditional(transformed_density, 2:4, 1:1, measurement; sqrt=sqrt)
-
-        # Working code below 
-        # μ_pred = density.mean
-        # Σ_pred = density.covariance
-        
-        # # Use gradient since the measurement function returns a scalar
-        # H = ForwardDiff.jacobian(predict_measurement, μ_pred)
-        # R = Matrix(Diagonal([50.0^2])) # Measurement noise covariance
-
-        # K = Σ_pred * H' / (H * Σ_pred * H' + R)
-        # μ = μ_pred + K * (measurement - predict_measurement(μ_pred))
-        # Σ = (I - K * H) * Σ_pred
-
-        # return from_moment(μ, Σ) 
     end 
 end 
 
